@@ -412,82 +412,46 @@ do
 end
 
 -- Color conversions
-local rgbToLuv
-local luvToRgb
+local rgbToOklab
+local oklabToRgb
 do
-	local function inverseGammaCorrectD65(c)
-		return c < 0.0404482362771076 and c/12.92 or 0.87941546140213*(c + 0.055)^2.4
+	local function cbrt(x)
+		return math.sign(x)*math.abs(x)^(1/3)
 	end
 
-	local function gammaCorrectD65(c)
-		return c < 3.1306684425e-3 and 12.92*c or 1.055*c^(1/2.4) - 0.055
-	end
-
-	function rgbToLuv(value: Color3): {number}
-		-- convert RGB to a variant of cieluv space
+	function rgbToOklab(value: Color3): {number}
 		local r, g, b = value.R, value.G, value.B
 
-		-- D65 sRGB inverse gamma correction
-		r = inverseGammaCorrectD65(r)
-		g = inverseGammaCorrectD65(g)
-		b = inverseGammaCorrectD65(b)
+		local l = cbrt(0.4122214708*r + 0.5363325363*g + 0.0514459929*b)
+		local m = cbrt(0.2119034982*r + 0.6806995451*g + 0.1073969566*b)
+		local s = cbrt(0.0883024619*r + 0.2817188376*g + 0.6299787005*b)
 
-		-- sRGB -> xyz
-		local x = 0.9257063972951867*r - 0.8333736323779866*g - 0.09209820666085898*b
-		local y = 0.2125862307855956*r + 0.71517030370341085*g + 0.0722004986433362*b
-		local z = 3.6590806972265883*r + 11.4426895800574232*g + 4.1149915024264843*b
-
-		-- xyz -> scaled cieluv
-		local l = y > 0.008856451679035631 and 116*y^(1/3) - 16 or 903.296296296296*y
-
-		local u, v
-		if z > 1e-14 then
-			u = l*x/z
-			v = l*(9*y/z - 0.46832)
-		else
-			u = -0.19783*l
-			v = -0.46832*l
-		end
-
-		return {l, u, v}
+		return {
+			0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+			1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+			0.0259040371*l + 0.7827717662*m - 0.8086757660*s}
 	end
 
-	function luvToRgb(value: {number}): Color3
-		-- convert back from modified cieluv to rgb space
-		local l = value[1]
-		if l < 0.0197955 then
-			return Color3.new(0, 0, 0)
-		end
-		local u = value[2]/l + 0.19783
-		local v = value[3]/l + 0.46832
+	function oklabToRgb(value: {number}): Color3
+		local L, a, b = value[1], value[2], value[3]
 
-		-- cieluv -> xyz
-		local y = (l + 16)/116
-		y = y > 0.206896551724137931 and y*y*y or 0.12841854934601665*y - 0.01771290335807126
-		local x = y*u/v
-		local z = y*((3 - 0.75*u)/v - 5)
-
-		-- xyz -> D65 sRGB
-		local r =  7.2914074*x - 1.5372080*y - 0.4986286*z
-		local g = -2.1800940*x + 1.8757561*y + 0.0415175*z
-		local b =  0.1253477*x - 0.2040211*y + 1.0569959*z
-
-		-- clamp minimum sRGB component
-		if r < 0 and r < g and r < b then
-			r, g, b = 0, g - r, b - r
-		elseif g < 0 and g < b then
-			r, g, b = r - g, 0, b - g
-		elseif b < 0 then
-			r, g, b = r - b, g - b, 0
+		local l = (L + 0.3963377774*a + 0.2158037573*b)^3
+		local m = (L - 0.1055613458*a - 0.0638541728*b)^3
+		local s = (L - 0.0894841775*a - 1.2914855480*b)^3
+		
+		if l < 0 or m < 0 or s < 0 then
+			print(math.sign(l), math.sign(m), math.sign(s))
 		end
 
-		-- gamma correction from D65
-		-- clamp to avoid undesirable overflow wrapping behavior on certain properties (e.g. BasePart.Color)
-		return Color3.new(
-			min(gammaCorrectD65(r), 1),
-			min(gammaCorrectD65(g), 1),
-			min(gammaCorrectD65(b), 1)
-		)
+		local r = 4.0767416621*l - 3.3077115913*m + 0.2309699292*s
+		local g = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s
+		local b = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s
+		
+		r = math.clamp(r, 0, 1)
+		g = math.clamp(g, 0, 1)
+		b = math.clamp(b, 0, 1)
+
+		return Color3.new(r, g, b)
 	end
 end
 
@@ -573,8 +537,8 @@ local typeMetadata = {
 
 	Color3 = {
 		springType = LinearSpring.new,
-		toIntermediate = rgbToLuv,
-		fromIntermediate = luvToRgb,
+		toIntermediate = rgbToOklab,
+		fromIntermediate = oklabToRgb,
 	},
 
 	-- Only interpolates start and end keypoints
@@ -583,21 +547,17 @@ local typeMetadata = {
 
 		toIntermediate = function(value)
 			local keypoints = value.Keypoints
-
-			local luv0 = rgbToLuv(keypoints[1].Value)
-			local luv1 = rgbToLuv(keypoints[#keypoints].Value)
-
+			local from = rgbToOklab(keypoints[1].Value)
+			local to = rgbToOklab(keypoints[#keypoints].Value)
 			return {
-				luv0[1], luv0[2], luv0[3],
-				luv1[1], luv1[2], luv1[3],
-			}
+				from[1], from[2], from[3],
+				to[1], to[2], to[3]}
 		end,
 
 		fromIntermediate = function(value: {})
 			return ColorSequence.new(
-				luvToRgb{value[1], value[2], value[3]},
-				luvToRgb{value[4], value[5], value[6]}
-			)
+				oklabToRgb{value[1], value[2], value[3]},
+				oklabToRgb{value[4], value[5], value[6]})
 		end,
 	},
 
