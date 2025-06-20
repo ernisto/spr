@@ -109,6 +109,14 @@ do
 		self.g = self.typedat.toIntermediate(goal)
 	end
 
+	function LinearSpring.setVelocity<T>(self: LinearSpring<T>, velocity: T, amplifier: number)
+		local v = self.typedat.toIntermediate(velocity)
+		for i, n in v do
+			v[i] = n * amplifier
+		end
+		self.v = v
+	end
+
 	function LinearSpring.setDampingRatio<T>(self: LinearSpring<T>, dampingRatio: number)
 		self.d = dampingRatio
 	end
@@ -332,6 +340,10 @@ do
 		local sleepV = self.v.Magnitude < SLEEP_ROTATION_VELOCITY
 		return sleepP and sleepV
 	end
+	
+	function RotationSpring.setVelocity(self: RotationSpring, value: CFrame, amplifier: number)
+		self.v = axisAngleDiff(self.p, value:Orthonormalize()) * amplifier
+	end
 
 	function RotationSpring.step(self: RotationSpring, dt: number): CFrame
 		local d = self.d
@@ -424,6 +436,11 @@ do
 		self.rawGoal = value
 		self._position:setGoal(value.Position)
 		self._rotation:setGoal(value.Rotation)
+	end
+
+	function CFrameSpring:setVelocity(value: CFrame, amplifier: number)
+		self._position:setVelocity(value.Position, amplifier)
+		self._rotation:setVelocity(value.Rotation, amplifier)
 	end
 
 	function CFrameSpring:setDampingRatio(value: number)
@@ -798,7 +815,60 @@ function spr.target(instance: Instance, dampingRatio: number, frequency: number,
 		spring:setDampingRatio(dampingRatio)
 		spring:setFrequency(frequency)
 	end
+	if not next(state) then
+		targetRecord[instance] = nil
+	end
+end
 
+function spr.setVelocity(instance: Instance, amplifier: number, properties: { [string]: any })
+	if STRICT_RUNTIME_TYPES then
+		assertType(1, "spr.setVelocity", "Instance", instance)
+		assertType(2, "spr.setVelocity", "number", amplifier)
+		assertType(3, "spr.setVelocity", "table", properties)
+	end
+
+	if amplifier ~= amplifier or amplifier < 0 then
+		error(('expected damping ratio >= 0; got %.2f'):format(amplifier), 2)
+	end
+
+	local targetRecord = (
+		if instance:IsA("Camera") then springStates_render else springStates_other
+	) :: { [Instance]: { [string]: any } }
+
+	local state = targetRecord[instance]
+	if not state then
+		state = {}
+		targetRecord[instance] = state
+	end
+
+	for propName, propVelocity in properties do
+		local propValue = getProperty(instance, propName)
+
+		if STRICT_RUNTIME_TYPES and typeof(propVelocity) ~= typeof(propValue) then
+			error(
+				`bad property {propName} to spr.setVelocity ({typeof(propValue)} expected, got {typeof(propVelocity)})`,
+				2
+			)
+		end
+
+		-- Special case infinite frequency for an instantaneous change
+		if amplifier == math.huge then
+			setProperty(instance, propName, propVelocity)
+			state[propName] = nil
+			continue
+		end
+
+		local spring = state[propName]
+		if not spring then
+			local md = typeMetadata[typeof(propVelocity)]
+			if not md then error("unsupported type: " .. typeof(propVelocity), 2) end
+
+			spring = md.springType(1.00, 1, propValue, propValue, md)
+			state[propName] = spring
+		end
+
+		spring:setVelocity(propVelocity, amplifier)
+	end
 	if not next(state) then
 		targetRecord[instance] = nil
 	end
