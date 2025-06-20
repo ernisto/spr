@@ -1,0 +1,5 @@
+[package]
+name = "ernisto/spr"
+version = "0.3.2"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
