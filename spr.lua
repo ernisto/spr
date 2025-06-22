@@ -745,11 +745,14 @@ local function processSprings(springStates: typeof(springStates_other), dt: numb
 	end
 end
 
-RunService.PreSimulation:Connect(function(dt)
+local pre_simulation:RBXScriptSignal<number> = if RunService:IsRunning() then RunService.PreSimulation else RunService.Heartbeat
+local post_simulation:RBXScriptSignal<number> = if RunService:IsRunning() then RunService.PostSimulation else RunService.Heartbeat
+
+pre_simulation:Connect(function(dt)
 	processSprings(springStates_other, dt)
 end)
 
-RunService.PostSimulation:Connect(function(dt)
+post_simulation:Connect(function(dt)
 	processSprings(springStates_render, dt)
 end)
 
